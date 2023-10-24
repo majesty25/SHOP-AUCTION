@@ -26,6 +26,7 @@ urlpatterns = [
     path('uploads/', product_views.ImageUploadView.as_view(), name='image-upload'),
 
     path('image/', product_views.AccessTokenView.as_view(), name='file-get'),
+    path('images/', product_views.ImagesAccessTokenView.as_view(), name='files-get'),
 
 
     # path('delete-images/', views.delete_multiple_images, name='delete-images'),

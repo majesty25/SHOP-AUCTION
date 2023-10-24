@@ -782,8 +782,8 @@ def create_resized_image(uploaded_file, width, height):
     return output
 
 
-def upload_image_to_firebase(file, location, width, height):
-    unique_filename = generate_unique_filename(file.name)
+def upload_image_to_firebase(file, unique_filename, location, width, height):
+    # unique_filename = generate_unique_filename(file.name)
     resized_image = create_resized_image(file, width, height)
 
     # Initialize the Firebase Storage client
@@ -861,23 +861,27 @@ class ImageUploadView(generics.CreateAPIView):
         product_media = ProductMedia(product=product)
 
         if main_pic:
-            product_media.main_picture = generate_unique_filename(main_pic.name)
-            product_media.thumbnail = generate_unique_filename(main_pic.name)
+            unique_filename = generate_unique_filename(main_pic.name)
+            product_media.main_picture = unique_filename
+            product_media.thumbnail = unique_filename
 
         product_media.save()
 
+        if main_pic:
+            upload_image_to_firebase(main_pic, unique_filename, 'picture', 600, 600)
+            upload_image_to_firebase(main_pic, unique_filename, 'thumbnails', 300, 300)
+
         # Create and save instances for other pictures
         for uploaded_file in images:
-            product_image = ProductImages(product=product, image=generate_unique_filename(uploaded_file.name))
+            unique_filename = generate_unique_filename(uploaded_file.name)
+            product_image = ProductImages(product=product, image=unique_filename)
             product_image.save()
+            upload_image_to_firebase(uploaded_file, unique_filename, 'images', 600, 600)
 
         # Upload images to Firebase Storage
-        if main_pic:
-            upload_image_to_firebase(main_pic, 'picture', 600, 600)
-            upload_image_to_firebase(main_pic, 'thumbnails', 300, 300)
-
-        for uploaded_file in images:            
-            upload_image_to_firebase(uploaded_file, 'images', 600, 600)
+        
+        # for uploaded_file in images:            
+        #     upload_image_to_firebase(uploaded_file, unique_filename, 'images', 600, 600)
 
         serializer = self.get_serializer(product_media)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -924,3 +928,81 @@ class AccessTokenView(generics.RetrieveAPIView):
             })            
         else:
             return Response({'error': 'Image not found.'}, status=404)
+        
+
+
+class ImagesAccessTokenView(generics.RetrieveAPIView):
+    queryset = ProductImages.objects.all()
+    serializer_class = ImageSerializer
+
+    def get_object(self):
+        product_id = self.request.query_params.get('product')
+        images = ProductImages.objects.filter(product_id=product_id)
+        media = ProductMedia.objects.filter(product_id=product_id)
+
+        access_tokens = []
+        media_tokens = []
+        counter = 1
+
+
+        for image in images:
+            image_name = image.image
+
+            try:
+                url = f'https://firebasestorage.googleapis.com/v0/b/auction-c5969.appspot.com/o/product%2Fimages%2F{image_name}'
+
+                # Send the GET request
+                response = requests.get(url)
+                print(url)
+
+                # Check if the request was successful (status code 200)
+                if response.status_code == 200:
+                    access_token = response.json()
+                    access_tokens.append({
+                        f'access_token{counter}': f'https://firebasestorage.googleapis.com/v0/b/auction-c5969.appspot.com/o/product%2Fimages%2F{image_name}?alt=media&token={access_token["downloadTokens"]}'
+                    })
+                else:
+                    access_tokens.append({
+                        'error': f'Error: {response.status_code}'
+                    })
+
+                counter = counter + 1
+
+            except Exception as e:
+                access_tokens.append({
+                    'error': str(e)
+                })
+        for x in media:
+            try:
+                    url1 = f'https://firebasestorage.googleapis.com/v0/b/auction-c5969.appspot.com/o/product%2Fpicture%2F{x.main_picture}'
+                    url2 = f'https://firebasestorage.googleapis.com/v0/b/auction-c5969.appspot.com/o/product%2Fthumbnails%2F{x.thumbnail}'
+                    # Send the GET request
+                    response1 = requests.get(url1)
+                    response2 = requests.get(url2)
+                
+                    # Check if the request was successful (status code 200)
+                    if response1.status_code == 200 and response2.status_code == 200:
+                        picture_access_token = response1.json()
+                        thumbnail_access_token = response2.json()
+                        media_tokens.append({
+                            'picture_access_token': f'https://firebasestorage.googleapis.com/v0/b/auction-c5969.appspot.com/o/product%2Fpicture%2F{x.main_picture}?alt=media&token={picture_access_token["downloadTokens"]}',
+                            'thumbnail_access_token': f'https://firebasestorage.googleapis.com/v0/b/auction-c5969.appspot.com/o/product%2Fthumbnails%2F{x.thumbnail}?alt=media&token={thumbnail_access_token["downloadTokens"]}',
+
+                        })
+                    else:
+                        media_tokens.append({
+                            'error': f'Error: {response.status_code}'
+                        })
+
+            except Exception as e:
+                media_tokens.append({
+                    'error': str(e)
+                })
+
+        # return access_tokens
+        return {"media": media_tokens, "images": access_tokens}
+
+    def retrieve(self, request, *args, **kwargs):
+        access_tokens = self.get_object()
+
+        return Response(access_tokens)
