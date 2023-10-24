@@ -1,8 +1,11 @@
+from datetime import datetime
 import os
 import uuid
 from io import BytesIO, StringIO
 from itertools import product
 from django.utils import timezone
+from firebase_admin import storage
+from django.contrib.postgres.fields import ArrayField
 
 from django.conf import settings
 from django.core.files import File
@@ -557,21 +560,11 @@ class UserStats(models.Model):
         return f"{self.user} - {self.auction} - {self.view_timestamp}"
 
 
+class ProductMedia(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    main_picture = models.CharField(max_length=255, blank=True, null=True)
+    thumbnail = models.CharField(max_length=255, blank=True, null=True)
 
-# class Wishlist(models.Model):
-#     product = models.ForeignKey(
-#         Product,
-#         on_delete=models.CASCADE,
-#         related_name='wishlist_product'
-#     )
-#     user = models.ForeignKey(
-#         settings.AUTH_USER_MODEL,
-#         on_delete=models.CASCADE,
-#         related_name='wishlist_user'
-#     )
-
-#     class Meta:
-#         unique_together = (("user", "product"),)
-
-#     def __str__(self):
-#         return f"{self.product.name} - {self.user.id}"
+class ProductImages(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    image = models.CharField(max_length=255, null=True, blank=True)

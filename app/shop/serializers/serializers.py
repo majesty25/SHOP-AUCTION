@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.db.models import Avg
 from rest_framework import serializers
 
-from shop.models import (Brand, Category, Media, Product, Bid, UserStats, ProductAttribute,
+from shop.models import (Brand, Category, Media, Product, ProductMedia, ProductImages, Bid, UserStats, ProductAttribute,
                          ProductAttributeValue, ProductAttributeValues,
                          ProductType)
 from user.serializers import UserSerializer
@@ -172,7 +172,7 @@ class ProductImageSerializer(serializers.ModelSerializer):
     # AWS_S3_ENDPOINT_URL
 
     def get_uri(self, obj):
-        return f"{settings.AWS_S3_ENDPOINT_URL}{obj.image}"
+        return "Hello"
 
     class Meta:
         model = Media
@@ -298,19 +298,21 @@ class ViewChartSerializer(serializers.Serializer):
             'view_count': instance['view_count']
         }
 
-# class WishlistSerializer(serializers.ModelSerializer):
-#     """Serializer for wishlist"""
+class ImageSerializer(serializers.Serializer):
+    pass
 
-#     class Meta:
-#         model = Wishlist
-#         fields = ('id', 'product', 'user')
-#         read_only = ('id')
+class FileUploadSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductImages
+        fields = ('product', 'url')
 
-# class WishlistDetailsSerializer(serializers.ModelSerializer):
-#     """Serializer for wishlist detail"""
-#     product = ProductSerializer(many=False)
 
-#     class Meta:
-#         model = Wishlist
-#         fields = ('id', 'product', 'user')
-#         read_only = ('id')
+
+class ProductMediaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductMedia
+        fields = ('product', 'main_picture')
+
+    def create(self, validated_data):
+        # You can add any custom logic here if needed
+        return ProductMedia.objects.create(**validated_data)

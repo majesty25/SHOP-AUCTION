@@ -14,3 +14,8 @@ admin.site.register(models.ProductAttributeValue)
 admin.site.register(models.ProductAttributeValues)
 admin.site.register(models.ProductType)
 admin.site.register(models.Brand)
+admin.site.register(models.ProductMedia)
+admin.site.register(models.ProductImages)
+
+
+

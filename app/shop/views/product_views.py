@@ -2,8 +2,20 @@ from datetime import datetime, timedelta
 from django.utils import timezone
 import json
 from html import unescape
+import firebase_admin
+import requests
+import os
+import uuid
+from firebase_admin import storage
+from firebase_admin.credentials import Certificate
+from PIL import Image
+from io import BytesIO
+from django.core.files.uploadedfile import InMemoryUploadedFile
+
 from itertools import product
 from django.db.models import Sum
+from django.http import HttpResponse
+
 from django.db.models.functions import TruncDate
 from django.shortcuts import get_object_or_404
 from django.contrib.postgres.search import SearchVector
@@ -13,7 +25,7 @@ from rest_framework import (authentication, mixins, generics, serializers, statu
                             viewsets, filters)
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.decorators import action, api_view
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.exceptions import NotFound
 
@@ -21,15 +33,18 @@ from rest_framework.exceptions import NotFound
 from core import permissions
 from core.utils import (StandardResultsSetPagination, clean_url,
                         create_error_data, create_message_data)
-from shop.models import (Category, Media, Product, Bid, ProductAttribute, UserStats,
+from shop.models import (Category, Media, Product,ProductImages, ProductMedia, Bid, ProductAttribute, UserStats,
                          ProductAttributeValues)
 from shop.serializers import (CategorySerializer,
                               ProductAttributeNoCategorySerializer,
                               ProductAttributeSerializer,
-                              BidSerializer,
+                              BidSerializer,                              
                               UserStatsSerializer,
+                              FileUploadSerializer,
                               BidChartSerializer,
+                              ImageSerializer,
                               ViewChartSerializer,
+                              ProductMediaSerializer,
                               ProductAttributeValuesAttrSerializer,
                               ProductAttributeValuesSerializer,
                               ProductDetailSerializer, ProductImageSerializer,
@@ -94,7 +109,7 @@ class PublicProductViewSet(
     pagination_class = StandardResultsSetPagination
     authentication_classes = (TokenAuthentication,)
     permission_classes = (
-        IsAuthenticated,
+        AllowAny,
         permissions.UpdateOwnObject,
     )
 
@@ -725,3 +740,187 @@ class ViewChartView(generics.ListAPIView):
         user = self.request.user
         view_data = UserStats.objects.filter(auction__user=user).annotate(view_date=TruncDate('view_timestamp')).values('view_date').annotate(view_count=Count('id'))
         return view_data
+    
+
+def resize_image(uploaded_file, width, height):
+    img = Image.open(uploaded_file)
+    img.thumbnail((width, height))
+    
+    output_io = BytesIO()
+    img.save(output_io, format='JPEG')
+    
+    # Create an InMemoryUploadedFile from the BytesIO
+    return InMemoryUploadedFile(output_io, None, 'image.jpg', 'image/jpeg', output_io.tell(), None)
+
+
+# Define the generate_unique_filename function outside the class
+def generate_unique_filename(filename):
+    # Get the file extension
+    file_extension = os.path.splitext(filename)[-1]
+
+    # Generate a random string (you can adjust the length as needed)
+    random_string = str(uuid.uuid4().hex)[:8]
+
+    # Get the current timestamp
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+
+    # Combine the timestamp, random string, and file extension
+    unique_filename = f"{timestamp}_{random_string}{file_extension}"
+
+    return unique_filename
+
+
+def create_resized_image(uploaded_file, width, height):
+    image = Image.open(uploaded_file)
+    image = image.resize((width, height), Image.ANTIALIAS)
+
+    # Create an in-memory file-like object (BytesIO) to hold the resized image
+    output = BytesIO()
+    image.save(output, format='JPEG')
+    output.seek(0)  # Reset the stream to the beginning
+
+    return output
+
+
+def upload_image_to_firebase(file, location, width, height):
+    unique_filename = generate_unique_filename(file.name)
+    resized_image = create_resized_image(file, width, height)
+
+    # Initialize the Firebase Storage client
+    bucket = storage.bucket()
+    file_name = f'product/{location}/{unique_filename}'
+
+    # Upload the resized image to Firebase Storage
+    blob = bucket.blob(file_name)
+    blob.upload_from_file(resized_image, content_type='image/jpeg')
+
+    # Get the public URL of the uploaded file
+    file_url = blob.public_url
+    return file_name
+
+class FileUploadView(generics.CreateAPIView):
+    queryset = ProductImages.objects.all()
+    serializer_class = FileUploadSerializer
+
+    def create(self, request, *args, **kwargs):
+        uploaded_file = request.FILES.get('file')
+        product_id = request.data.get('product')
+
+        if not uploaded_file:
+            return Response({'error': 'No file provided.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            product = Product.objects.get(pk=product_id)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found.'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+        unique_filename = generate_unique_filename(uploaded_file.name)
+
+        # Resize the uploaded image
+        resized_image = create_resized_image(uploaded_file, 600, 600)
+
+        # Initialize the Firebase Storage client
+        bucket = storage.bucket()
+        file_name = f'uploads/{unique_filename}'
+
+        # Upload the resized image to Firebase Storage
+        blob = bucket.blob(file_name)
+        blob.upload_from_file(resized_image, content_type='image/jpeg')
+
+        # Get the public URL of the uploaded file
+        file_url = blob.public_url
+
+        data = {
+            'product': product.id,
+            'url': file_url,
+        }
+
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer, product, unique_filename)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def perform_create(self, serializer, product, unique_filename):
+        serializer.save(product=product, url=unique_filename)
+
+
+
+class ImageUploadView(generics.CreateAPIView):
+    serializer_class = ProductMediaSerializer
+
+    def create(self, request, *args, **kwargs):
+        product_id = request.data.get('product')
+        product = get_object_or_404(Product, pk=product_id)
+        main_pic = request.FILES.get('main_picture')
+        images = request.FILES.getlist('other_pictures')
+
+        if not main_pic and not images:
+            return Response({'error': 'No files provided.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        product_media = ProductMedia(product=product)
+
+        if main_pic:
+            product_media.main_picture = generate_unique_filename(main_pic.name)
+            product_media.thumbnail = generate_unique_filename(main_pic.name)
+
+        product_media.save()
+
+        # Create and save instances for other pictures
+        for uploaded_file in images:
+            product_image = ProductImages(product=product, image=generate_unique_filename(uploaded_file.name))
+            product_image.save()
+
+        # Upload images to Firebase Storage
+        if main_pic:
+            upload_image_to_firebase(main_pic, 'picture', 600, 600)
+            upload_image_to_firebase(main_pic, 'thumbnails', 300, 300)
+
+        for uploaded_file in images:            
+            upload_image_to_firebase(uploaded_file, 'images', 600, 600)
+
+        serializer = self.get_serializer(product_media)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+
+class AccessTokenView(generics.RetrieveAPIView):
+    queryset = ProductImages.objects.all()
+    serializer_class = ImageSerializer
+
+
+    def get_object(self):
+        # image_name = self.request.query_params.get('image_name')
+        product_id = self.request.query_params.get('product')
+        image = ProductImages.objects.get(product_id=product_id)
+        image_name = image.url
+
+        image_path = f'uploads/{image_name}'
+
+        try:
+            url = f'https://firebasestorage.googleapis.com/v0/b/auction-c5969.appspot.com/o/uploads%2F{image_name}'
+
+            # Send the GET request
+            response = requests.get(url)
+
+            # Check if the request was successful (status code 200)
+            if response.status_code == 200:
+
+                # Print the response content
+                # print(response.text)
+                return response.json(), image_name
+            
+            else:
+                return f'Error: {response.status_code}'
+
+        except Exception as e:
+            return None
+
+    def retrieve(self, request, *args, **kwargs):
+        access_token = self.get_object()
+        if access_token is not None:
+            return Response({
+                'access_token': f'https://firebasestorage.googleapis.com/v0/b/auction-c5969.appspot.com/o/uploads%2F{access_token[1]}?alt=media&token={access_token[0]["downloadTokens"]}'
+            })            
+        else:
+            return Response({'error': 'Image not found.'}, status=404)

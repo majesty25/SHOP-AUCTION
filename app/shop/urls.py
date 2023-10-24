@@ -22,6 +22,11 @@ urlpatterns = [
     path('get-total-bids/', product_views.GetUserTotalBids.as_view(), name='get_total_bids'),
     path('bid-chart/', product_views.BidChartView.as_view(), name='bid-chart'),
     path('views-chart/', product_views.ViewChartView.as_view(), name='view-chart'),
+    path('upload/', product_views.FileUploadView.as_view(), name='file-upload'),
+    path('uploads/', product_views.ImageUploadView.as_view(), name='image-upload'),
+
+    path('image/', product_views.AccessTokenView.as_view(), name='file-get'),
+
 
     # path('delete-images/', views.delete_multiple_images, name='delete-images'),
     path("", include(router.urls)),
